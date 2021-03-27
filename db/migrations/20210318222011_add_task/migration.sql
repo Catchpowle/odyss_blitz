@@ -1,0 +1,12 @@
+-- CreateTable
+CREATE TABLE "Task" (
+    "id" INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "createdAt" DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    "updatedAt" DATETIME NOT NULL,
+    "description" TEXT NOT NULL,
+    "startedAt" DATETIME NOT NULL,
+    "endedAt" DATETIME NOT NULL,
+    "isComplete" BOOLEAN NOT NULL DEFAULT false,
+    "userId" INTEGER NOT NULL,
+    FOREIGN KEY ("userId") REFERENCES "User" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
