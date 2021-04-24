@@ -1,13 +1,34 @@
-import React, { Suspense, FC } from "react"
+import React, { Suspense, FC, useState, useEffect } from "react"
 import { Head, usePaginatedQuery, useMutation, useRouter, BlitzPage, invalidateQuery } from "blitz"
 import Layout from "app/core/layouts/Layout"
 import getTasks from "app/tasks/queries/getTasks"
 import updateTask from "app/tasks/mutations/updateTask"
 import { TaskForm, FORM_ERROR } from "app/tasks/components/TaskForm"
 import { useCurrentUser } from "app/core/hooks/useCurrentUser"
-import { addMinutes, roundToNearestMinutes, isFuture, format } from "date-fns"
+import {
+  addMinutes,
+  subMinutes,
+  differenceInMinutes,
+  roundToNearestMinutes,
+  isFuture,
+  format,
+  isEqual,
+} from "date-fns"
 import createTask from "app/tasks/mutations/createTask"
-import { Center, Checkbox, HStack, List, ListItem, Stack, Text } from "@chakra-ui/react"
+import {
+  Box,
+  Button,
+  Center,
+  Checkbox,
+  Flex,
+  HStack,
+  IconButton,
+  List,
+  ListItem,
+  Stack,
+  Text,
+} from "@chakra-ui/react"
+import { AddIcon, MinusIcon } from "@chakra-ui/icons"
 
 const ITEMS_PER_PAGE = 100
 
@@ -17,29 +38,61 @@ type TaskProps = {
   isComplete: boolean
   startedAt: Date
   endedAt: Date
+  editState: boolean
+  updateSchedule: (id: number, action: string) => any
 }
 
-const Task: FC<TaskProps> = ({ id, description, isComplete, startedAt, endedAt }) => {
+const Task: FC<TaskProps> = ({
+  id,
+  description,
+  isComplete,
+  startedAt,
+  endedAt,
+  editState,
+  updateSchedule,
+}) => {
   const formatDate = (date) => format(date, "HH:mm")
   const [updateTaskMutation] = useMutation(updateTask)
   const textColor = isComplete ? "gray.500" : "gray.800"
 
   return (
-    <ListItem>
-      <HStack spacing="24px">
-        <Checkbox
-          onChange={async (e) => {
-            await updateTaskMutation({ id, isComplete: e.target.checked })
-            invalidateQuery(getTasks)
-          }}
-          isChecked={isComplete}
-        />
+    <ListItem my={6}>
+      <Flex>
+        <HStack spacing="24px" py={2}>
+          <Checkbox
+            onChange={async (e) => {
+              await updateTaskMutation({ id, isComplete: e.target.checked })
+              invalidateQuery(getTasks)
+            }}
+            isChecked={isComplete}
+          />
 
-        <Stack>
-          <Text color={textColor}>{`${formatDate(startedAt)} - ${formatDate(endedAt)}`}</Text>
-          <Text color={textColor}>{description}</Text>
-        </Stack>
-      </HStack>
+          <Stack>
+            <Text color={textColor}>{`${formatDate(startedAt)} - ${formatDate(endedAt)}`}</Text>
+            <Text color={textColor}>{description}</Text>
+          </Stack>
+        </HStack>
+        {editState && (
+          <Stack marginLeft="auto">
+            <IconButton
+              onClick={() => {
+                updateSchedule(id, "INCREMENT")
+              }}
+              aria-label="Add"
+              size="sm"
+              icon={<AddIcon />}
+            />
+            <IconButton
+              onClick={() => {
+                updateSchedule(id, "DECREMENT")
+              }}
+              aria-label="Minus"
+              size="sm"
+              icon={<MinusIcon />}
+            />
+          </Stack>
+        )}
+      </Flex>
     </ListItem>
   )
 }
@@ -56,10 +109,78 @@ export const TasksList = () => {
   const goToNextPage = () => router.push({ query: { page: page + 1 } })
   const currentUser = useCurrentUser()
   const [createTaskMutation] = useMutation(createTask)
+  const [cachedTasks, setCachedTasks] = useState(tasks)
+  const [editState, setEditState] = useState(false)
+  const [updateTaskMutation] = useMutation(updateTask)
+  const [scheduledMutations, setScheduledMutations] = useState<(() => void)[]>([])
+  const scheduleMutations = (mutations) => {
+    const mappedMutations = mutations.map((mutation) => {
+      return async () => {
+        await updateTaskMutation(mutation)
+        invalidateQuery(getTasks)
+      }
+    })
+
+    setScheduledMutations(mappedMutations)
+  }
+  const executeMutations = () => {
+    scheduledMutations.forEach((mutation) => mutation())
+  }
+
+  useEffect(() => {
+    setCachedTasks(tasks)
+  }, [tasks])
+
+  const updateSchedule = (id, action) => {
+    let cachedTask
+    let updatedTask
+    const mutations: any[] = []
+
+    const updatedTasks = cachedTasks.map((task) => {
+      if (task.id === id) {
+        cachedTask = task
+        if (action === "INCREMENT") {
+          const endedAt = addMinutes(task.endedAt, 5)
+          updatedTask = { ...task, endedAt }
+          mutations.push({ id, endedAt })
+          return updatedTask
+        } else if (action === "DECREMENT") {
+          const endedAt = subMinutes(task.endedAt, 5)
+          updatedTask = { ...task, endedAt }
+          mutations.push({ id, endedAt })
+          return updatedTask
+        }
+      } else {
+        if (cachedTask && updatedTask) {
+          if (isEqual(cachedTask.endedAt, task.startedAt)) {
+            cachedTask = task
+            const duration = differenceInMinutes(task.endedAt, task.startedAt)
+            const startedAt = updatedTask.endedAt
+            const endedAt = addMinutes(startedAt, duration)
+
+            updatedTask = {
+              ...task,
+              startedAt,
+              endedAt,
+            }
+
+            mutations.push({ id: task.id, startedAt, endedAt })
+
+            return updatedTask
+          }
+        }
+
+        return task
+      }
+    })
+
+    scheduleMutations(mutations)
+    setCachedTasks(updatedTasks as typeof tasks)
+  }
 
   return (
     <Center>
-      <Stack>
+      <Stack minWidth="50%">
         <TaskForm
           submitText="Create Task"
           // TODO use a zod schema for form validation
@@ -78,7 +199,7 @@ export const TasksList = () => {
               return
             }
 
-            const previousTask = tasks[tasks.length - 1]
+            const previousTask = cachedTasks[tasks.length - 1]
             const startedAt =
               previousTask && isFuture(previousTask.endedAt)
                 ? previousTask.endedAt
@@ -102,18 +223,58 @@ export const TasksList = () => {
             }
           }}
         />
-        <List spacing={4}>
-          {tasks.map(({ id, description, isComplete, startedAt, endedAt }) => (
-            <Task
-              id={id}
-              key={id}
-              description={description}
-              isComplete={isComplete}
-              startedAt={startedAt}
-              endedAt={endedAt}
-            />
-          ))}
-        </List>
+        <Stack spacing="5">
+          <Box paddingTop={2} paddingX={2} height="30rem" overflow="scroll">
+            <List spacing={4}>
+              {cachedTasks.map(({ id, description, isComplete, startedAt, endedAt }) => (
+                <Task
+                  id={id}
+                  key={id}
+                  description={description}
+                  isComplete={isComplete}
+                  startedAt={startedAt}
+                  endedAt={endedAt}
+                  editState={editState}
+                  updateSchedule={updateSchedule}
+                />
+              ))}
+            </List>
+          </Box>
+
+          <Box>
+            {editState ? (
+              <HStack>
+                <Button
+                  onClick={() => {
+                    executeMutations()
+                    setScheduledMutations([])
+
+                    setEditState(!editState)
+                  }}
+                >
+                  Submit
+                </Button>
+                <Button
+                  onClick={() => {
+                    setScheduledMutations([])
+                    setCachedTasks(tasks)
+                    setEditState(!editState)
+                  }}
+                >
+                  Cancel
+                </Button>
+              </HStack>
+            ) : (
+              <Button
+                onClick={() => {
+                  setEditState(!editState)
+                }}
+              >
+                Edit
+              </Button>
+            )}
+          </Box>
+        </Stack>
 
         {/* <button disabled={page === 0} onClick={goToPreviousPage}>
           Previous
