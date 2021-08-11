@@ -1,5 +1,13 @@
 import React, { Suspense, FC, useState, useEffect } from "react"
-import { Head, usePaginatedQuery, useMutation, useRouter, BlitzPage, invalidateQuery } from "blitz"
+import {
+  Head,
+  usePaginatedQuery,
+  useMutation,
+  useRouter,
+  BlitzPage,
+  invalidateQuery,
+  useInfiniteQuery,
+} from "blitz"
 import Layout from "app/core/layouts/Layout"
 import getTasks from "app/tasks/queries/getTasks"
 import updateTask from "app/tasks/mutations/updateTask"
@@ -32,15 +40,20 @@ import { AddIcon, MinusIcon } from "@chakra-ui/icons"
 
 const ITEMS_PER_PAGE = 100
 
-type TaskProps = {
+type CachedTask = {
   id: number
   description: string
   isComplete: boolean
   startedAt: Date
   endedAt: Date
+  isSelected: null | number
+}
+
+type TaskProps = {
   editState: boolean
   updateSchedule: (id: number, action: string) => any
-}
+  selectTask: (id: number, isSelected: null | number) => any
+} & CachedTask
 
 const Task: FC<TaskProps> = ({
   id,
@@ -50,6 +63,8 @@ const Task: FC<TaskProps> = ({
   endedAt,
   editState,
   updateSchedule,
+  selectTask,
+  isSelected,
 }) => {
   const formatDate = (date) => format(date, "HH:mm")
   const [updateTaskMutation] = useMutation(updateTask)
@@ -59,13 +74,22 @@ const Task: FC<TaskProps> = ({
     <ListItem my={6}>
       <Flex>
         <HStack spacing="24px" py={2}>
-          <Checkbox
-            onChange={async (e) => {
-              await updateTaskMutation({ id, isComplete: e.target.checked })
-              invalidateQuery(getTasks)
-            }}
-            isChecked={isComplete}
-          />
+          {editState ? (
+            <Checkbox
+              onChange={() => {
+                selectTask(id, isSelected)
+              }}
+              isChecked={Boolean(isSelected)}
+            />
+          ) : (
+            <Checkbox
+              onChange={async (e) => {
+                await updateTaskMutation({ id, isComplete: e.target.checked })
+                invalidateQuery(getTasks)
+              }}
+              isChecked={isComplete}
+            />
+          )}
 
           <Stack>
             <Text color={textColor}>{`${formatDate(startedAt)} - ${formatDate(endedAt)}`}</Text>
@@ -109,7 +133,10 @@ export const TasksList = () => {
   const goToNextPage = () => router.push({ query: { page: page + 1 } })
   const currentUser = useCurrentUser()
   const [createTaskMutation] = useMutation(createTask)
-  const [cachedTasks, setCachedTasks] = useState(tasks)
+  const [cachedTasks, setCachedTasks] = useState<CachedTask[]>(
+    tasks.map((task) => ({ ...task, isSelected: null }))
+  )
+
   const [editState, setEditState] = useState(false)
   const [updateTaskMutation] = useMutation(updateTask)
   const [scheduledMutations, setScheduledMutations] = useState<(() => void)[]>([])
@@ -128,7 +155,7 @@ export const TasksList = () => {
   }
 
   useEffect(() => {
-    setCachedTasks(tasks)
+    setCachedTasks(tasks.map((task) => ({ ...task, isSelected: null })))
   }, [tasks])
 
   const updateSchedule = (id, action) => {
@@ -175,7 +202,7 @@ export const TasksList = () => {
     })
 
     scheduleMutations(mutations)
-    setCachedTasks(updatedTasks as typeof tasks)
+    setCachedTasks(updatedTasks)
   }
 
   return (
@@ -224,20 +251,57 @@ export const TasksList = () => {
           }}
         />
         <Stack spacing="5">
-          <Box paddingTop={2} paddingX={2} height="30rem" overflow="scroll">
+          <Box paddingY={2} paddingX={2} height="30rem" overflow="scroll">
             <List spacing={4}>
-              {cachedTasks.map(({ id, description, isComplete, startedAt, endedAt }) => (
-                <Task
-                  id={id}
-                  key={id}
-                  description={description}
-                  isComplete={isComplete}
-                  startedAt={startedAt}
-                  endedAt={endedAt}
-                  editState={editState}
-                  updateSchedule={updateSchedule}
-                />
-              ))}
+              {cachedTasks.map(
+                ({ id, description, isComplete, isSelected, startedAt, endedAt }, index) => (
+                  <>
+                    {editState && index === 0 && (
+                      <Center>
+                        <Button variant="outline" onClick={() => (startedAt) => {}}>
+                          Move here
+                        </Button>
+                      </Center>
+                    )}
+                    <Task
+                      id={id}
+                      key={id}
+                      description={description}
+                      isComplete={isComplete}
+                      startedAt={startedAt}
+                      endedAt={endedAt}
+                      editState={editState}
+                      updateSchedule={updateSchedule}
+                      selectTask={(id, isSelected) => {
+                        const selectedTasks = cachedTasks.filter((task) => task.isSelected)
+
+                        const updatedTasks = cachedTasks.map((task) => {
+                          const taskIsSelected = task.isSelected as null | number
+                          if (id === task.id) {
+                            return task.isSelected
+                              ? { ...task, isSelected: null }
+                              : { ...task, isSelected: selectedTasks.length + 1 }
+                          } else {
+                            return isSelected && taskIsSelected && taskIsSelected > isSelected
+                              ? { ...task, isSelected: taskIsSelected - 1 }
+                              : { ...task }
+                          }
+                        })
+
+                        setCachedTasks(updatedTasks)
+                      }}
+                      isSelected={isSelected}
+                    />
+                    {editState && (
+                      <Center>
+                        <Button variant="outline" onClick={() => (endedAt) => {}}>
+                          Move here
+                        </Button>
+                      </Center>
+                    )}
+                  </>
+                )
+              )}
             </List>
           </Box>
 
@@ -257,7 +321,7 @@ export const TasksList = () => {
                 <Button
                   onClick={() => {
                     setScheduledMutations([])
-                    setCachedTasks(tasks)
+                    setCachedTasks(tasks.map((task) => ({ ...task, isSelected: null })))
                     setEditState(!editState)
                   }}
                 >
